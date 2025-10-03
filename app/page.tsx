@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { Download, Loader2, Image as ImageIcon, Sparkles } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Download, Loader2, Image as ImageIcon, Sparkles, RefreshCw } from 'lucide-react';
 import Image from 'next/image';
 
 // Predefined prompt templates
@@ -9,7 +9,16 @@ const PROMPT_TEMPLATES = [
   {
     id: 'pictogram',
     name: 'Pictogram Style',
-    template: 'Create a pictogram-style illustration of: {subject}. Style requirements: - Pictogram/icon style with simple geometric shapes - Pure black background (solid #000000) - Use ONLY white color (#FFFFFF) for all elements - Simple human figures with clear facial expressions - Rounded heads with expressive eyes and mouth - Full body stick-figure style or simple geometric bodies - Minimalist design with high contrast (white on black) - No gradients, no other colors, only pure white on pure black - No text or words in the image',
+    template: `
+    Create a pictogram-style illustration of: {subject}. Style requirements:
+    - Pictogram/icon style with simple geometric shapes
+    - Pure black background (solid #000000) 
+    - Use ONLY white color (#FFFFFF) for all elements 
+    - Simple human figures with clear facial expressions
+    - Rounded heads with expressive eyes and mouth 
+    - Full body stick-figure style or simple geometric bodies 
+    - Minimalist design with high contrast (white on black) 
+    - No gradients, no other colors, only pure white on pure black - No text or words in the image`,
     placeholder: 'people having a meeting around a table'
   },
   {
@@ -50,6 +59,34 @@ export default function Home() {
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastPrompt, setLastPrompt] = useState<string | null>(null);
+  const [isObjectMode, setIsObjectMode] = useState(false);
+  const [isOneCharacterMode, setIsOneCharacterMode] = useState(true);
+  const [credits, setCredits] = useState<{remainingCredits: number; totalCredits: number; usedCredits: number} | null>(null);
+  const [isLoadingCredits, setIsLoadingCredits] = useState(false);
+
+  const fetchCredits = async () => {
+    setIsLoadingCredits(true);
+    try {
+      const response = await fetch('/api/credits');
+      const data = await response.json();
+      
+      if (data.success) {
+        setCredits(data.credits);
+      } else {
+        console.error('Failed to fetch credits:', data.error);
+      }
+    } catch (error) {
+      console.error('Error fetching credits:', error);
+    } finally {
+      setIsLoadingCredits(false);
+    }
+  };
+
+  // Fetch credits on component mount
+  useEffect(() => {
+    fetchCredits();
+  }, []);
 
   const generateImage = async () => {
     if (!userInput.trim()) {
@@ -62,8 +99,18 @@ export default function Home() {
     setGeneratedImage(null);
 
     try {
-      const finalPrompt = selectedTemplate.template.replace('{subject}', userInput.trim());
+      let subjectWithModifiers = userInput.trim();
       
+      // Add character modifiers based on checkbox states
+      if (isObjectMode) {
+        subjectWithModifiers += ' - No character in the frame';
+      }
+      if (isOneCharacterMode) {
+        subjectWithModifiers += ' - Only one character in the frame';
+      }
+      
+      const finalPrompt = selectedTemplate.template.replace('{subject}', subjectWithModifiers);
+
       const response = await fetch('/api/generate', {
         method: 'POST',
         headers: {
@@ -79,7 +126,16 @@ export default function Home() {
       }
 
       setGeneratedImage(data.imageUrl);
+      setLastPrompt(finalPrompt); // Store the last used prompt
       setUserInput(''); // Clear input after successful generation
+
+      // Auto-download the generated image
+      setTimeout(() => {
+        downloadImageFromUrl(data.imageUrl);
+      }, 100); // Small delay to ensure image is set
+
+      // Refresh credits after successful generation
+      fetchCredits();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
@@ -87,11 +143,47 @@ export default function Home() {
     }
   };
 
-  const downloadImage = async () => {
-    if (!generatedImage) return;
+  const regenerateImage = async () => {
+    if (!lastPrompt) return;
+
+    setIsGenerating(true);
+    setError(null);
+    setGeneratedImage(null);
 
     try {
-      const response = await fetch(generatedImage);
+      const response = await fetch('/api/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ prompt: lastPrompt }),
+      });
+
+      const data = await response.json();
+
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to generate image');
+      }
+
+      setGeneratedImage(data.imageUrl);
+
+      // Auto-download the regenerated image
+      setTimeout(() => {
+        downloadImageFromUrl(data.imageUrl);
+      }, 100); // Small delay to ensure image is set
+
+      // Refresh credits after successful regeneration
+      fetchCredits();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const downloadImageFromUrl = async (imageUrl: string) => {
+    try {
+      const response = await fetch(imageUrl);
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -106,7 +198,26 @@ export default function Home() {
     }
   };
 
-  const currentPrompt = selectedTemplate.template.replace('{subject}', userInput || selectedTemplate.placeholder);
+  const downloadImage = async () => {
+    if (!generatedImage) return;
+    await downloadImageFromUrl(generatedImage);
+  };
+
+  const getCurrentPrompt = () => {
+    let subject = userInput || selectedTemplate.placeholder;
+    
+    // Add character modifiers for preview
+    if (isObjectMode) {
+      subject += ' - No character in the frame';
+    }
+    if (isOneCharacterMode) {
+      subject += ' - Only one character in the frame';
+    }
+    
+    return selectedTemplate.template.replace('{subject}', subject);
+  };
+
+  const currentPrompt = getCurrentPrompt();
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary-50 to-primary-100 py-8 px-4">
@@ -118,29 +229,76 @@ export default function Home() {
             <h1 className="text-4xl font-bold text-gray-800">Nano Banana AI</h1>
           </div>
           <p className="text-gray-600 text-lg">Generate stunning images with AI using customizable prompt templates</p>
+          
+          {/* Credits Display */}
+          <div className="mt-4 flex items-center justify-center gap-4">
+            <div className="bg-white rounded-lg shadow-md px-4 py-2 flex items-center gap-2">
+              {isLoadingCredits ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-primary-600" />
+                  <span className="text-gray-600">Loading credits...</span>
+                </>
+              ) : credits ? (
+                <>
+                  <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                  <span className="text-gray-700 font-medium">
+                    Credits: {credits.remainingCredits}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <div className="w-3 h-3 bg-gray-400 rounded-full"></div>
+                  <span className="text-gray-500">Credits unavailable</span>
+                </>
+              )}
+            </div>
+            
+            <button
+              onClick={fetchCredits}
+              disabled={isLoadingCredits}
+              className="bg-primary-100 hover:bg-primary-200 disabled:bg-gray-100 text-primary-700 px-3 py-2 rounded-lg transition-colors flex items-center gap-1"
+              title="Refresh credits"
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoadingCredits ? 'animate-spin' : ''}`} />
+              <span className="text-sm">Refresh</span>
+            </button>
+          </div>
         </div>
 
         <div className="grid lg:grid-cols-2 gap-8">
           {/* Left Panel - Controls */}
           <div className="space-y-6">
-            {/* Generate Button */}
-            <button
-              onClick={generateImage}
-              disabled={isGenerating || !userInput.trim()}
-              className="w-full bg-primary-600 hover:bg-primary-700 disabled:bg-gray-400 text-white font-semibold py-4 px-6 rounded-xl transition-colors flex items-center justify-center gap-2"
-            >
-              {isGenerating ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  Generating...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-5 h-5" />
-                  Generate Image
-                </>
+            {/* Generate Buttons */}
+            <div className="flex gap-3">
+              <button
+                onClick={generateImage}
+                disabled={isGenerating || !userInput.trim()}
+                className="flex-1 bg-primary-600 hover:bg-primary-700 disabled:bg-gray-400 text-white font-semibold py-4 px-6 rounded-xl transition-colors flex items-center justify-center gap-2"
+              >
+                {isGenerating ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-5 h-5" />
+                    Generate Image
+                  </>
+                )}
+              </button>
+
+              {lastPrompt && (
+                <button
+                  onClick={regenerateImage}
+                  disabled={isGenerating}
+                  className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white font-semibold py-4 px-4 rounded-xl transition-colors flex items-center justify-center"
+                  title="Regenerate with same prompt"
+                >
+                  <RefreshCw className="w-5 h-5" />
+                </button>
               )}
-            </button>
+            </div>
 
             {/* Template Selection */}
             <div className="bg-white rounded-xl shadow-lg p-6">
@@ -150,11 +308,10 @@ export default function Home() {
                   <button
                     key={template.id}
                     onClick={() => setSelectedTemplate(template)}
-                    className={`p-3 rounded-lg border-2 transition-all ${
-                      selectedTemplate.id === template.id
-                        ? 'border-primary-500 bg-primary-50 text-primary-700'
-                        : 'border-gray-200 hover:border-primary-300 text-gray-700'
-                    }`}
+                    className={`p-3 rounded-lg border-2 transition-all ${selectedTemplate.id === template.id
+                      ? 'border-primary-500 bg-primary-50 text-primary-700'
+                      : 'border-gray-200 hover:border-primary-300 text-gray-700'
+                      }`}
                   >
                     {template.name}
                   </button>
@@ -179,6 +336,32 @@ export default function Home() {
               />
             </div>
 
+            {/* Character Options */}
+            <div className="bg-white rounded-xl shadow-lg p-6">
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">Character Options</h2>
+              <div className="space-y-3">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isObjectMode}
+                    onChange={(e) => setIsObjectMode(e.target.checked)}
+                    className="w-4 h-4 text-primary-600 bg-gray-100 border-gray-300 rounded focus:ring-primary-500 focus:ring-2"
+                  />
+                  <span className="text-gray-700">Object - No character in the frame</span>
+                </label>
+                
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isOneCharacterMode}
+                    onChange={(e) => setIsOneCharacterMode(e.target.checked)}
+                    className="w-4 h-4 text-primary-600 bg-gray-100 border-gray-300 rounded focus:ring-primary-500 focus:ring-2"
+                  />
+                  <span className="text-gray-700">One character only</span>
+                </label>
+              </div>
+            </div>
+
             {/* Preview Prompt */}
             <div className="bg-white rounded-xl shadow-lg p-6">
               <h2 className="text-xl font-semibold text-gray-800 mb-4">Final Prompt</h2>
@@ -191,7 +374,7 @@ export default function Home() {
           {/* Right Panel - Image Display */}
           <div className="bg-white rounded-xl shadow-lg p-6">
             <h2 className="text-xl font-semibold text-gray-800 mb-4">Generated Image</h2>
-            
+
             <div className="aspect-square bg-gray-100 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center relative overflow-hidden">
               {isGenerating ? (
                 <div className="text-center">

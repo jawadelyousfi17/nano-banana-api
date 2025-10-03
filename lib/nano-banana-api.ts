@@ -23,6 +23,12 @@ export interface TaskStatus {
   };
 }
 
+export interface CreditsResponse {
+  code: number;
+  msg: string;
+  data: number | null;
+}
+
 export class NanoBananaAPI {
   private apiKey: string;
   private baseUrl = 'https://api.nanobananaapi.ai/api/v1/nanobanana';
@@ -157,5 +163,33 @@ export class NanoBananaAPI {
     }
     
     throw new Error('Generation timeout');
+  }
+
+  async getCredits(): Promise<CreditsResponse> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+
+    try {
+      const response = await fetch('https://api.nanobananaapi.ai/api/v1/common/credit', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`
+        },
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+      const result = await response.json();
+      
+      console.log('Credits API response:', JSON.stringify(result, null, 2));
+      
+      return result;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Credits check timeout. Please try again.');
+      }
+      throw error;
+    }
   }
 }
